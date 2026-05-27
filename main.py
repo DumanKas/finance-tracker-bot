@@ -5,8 +5,17 @@ import logging
 logging.basicConfig(level=logging.INFO)
 import asyncio
 import os
-from database import database,add_expence,get_today_total,get_weekly_total,get_monthly_total,create_settings_table,get_limit,set_daily_limit
+import requests
+from bs4 import BeautifulSoup
+
+from database import (
+    database, add_expence, get_today_total, get_weekly_total,
+    get_monthly_total, create_settings_table, get_limit,
+    set_daily_limit, get_weekly_stat, get_subscribers, add_to_subscribers,save_vacancy,get_new_vacancies
+)
 from dotenv import load_dotenv
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+scheduler = AsyncIOScheduler()
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TOKEN)
@@ -14,6 +23,7 @@ dp = Dispatcher()
 
 @dp.message(Command('start'))
 async def start_command(message: types.Message):
+    add_to_subscribers(user_id=message.from_user.id)
     await message.answer("Привет, я бот который считает твой финансы\n\nНажми /help чтобы посмотреть список команд")
 
 @dp.message(Command('help'))
@@ -75,6 +85,72 @@ async def total_week(message: types.Message):
     else:
         await message.answer(f'📊 Ваши траты за последние 7 дней: **{result} тенге**', parse_mode="Markdown")
 
+
+
+
+async def send_weekly_report():
+    subscribers = get_subscribers()
+    for user_id in subscribers:
+        stats = get_weekly_stat(user_id)
+        total = get_weekly_total(user_id)
+        if not stats and total == 0:
+            continue
+
+        text = "📊 **Итоги недели по категориям:**\n\n"
+        for category, amount in stats:
+            text += f"• {category} — {amount} тг\n"
+        text += f"\n💰 **Итого за неделю:** `{total}` тг"
+
+        try:
+            await bot.send_message(user_id,text)
+        except Exception as e:
+            pass
+
+
+async def auto_parse_jobs():
+    logging.info('Запуск автоматического парсинга вакансий...')
+    url = "https://hh.kz/search/vacancy?text=python&area=160"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, "html.parser")
+        vacancies = soup.find_all("span", attrs={"data-qa": "serp-item__title-text"})
+        for vacancy in vacancies:
+            save_vacancy(vacancy.text, "https://hh.kz" + vacancy.find_parent("a")["href"])
+    else:
+
+        logging.error(f"Ошибка при запросе вакансий: {response.status_code}")
+
+
+@dp.message(Command("new"))
+async def new_vacancies(message: types.Message):
+    vacancies = get_new_vacancies()
+    if vacancies:
+        text = "Новые вакансии за последние 6 часов:\n\n"
+        for title, url in vacancies:
+            text += f"• {title} - {url}\n"
+        await message.answer(text)
+    else:
+        await message.answer("Новых вакансий нет за последние 6 часов.")
+@dp.message(Command("jobs"))
+async def jobs_command(message: types.Message):
+    url = "https://hh.kz/search/vacancy?text=python&area=160"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, "html.parser")
+        vacancies = soup.find_all("span", attrs={"data-qa": "serp-item__title-text"})
+        five = vacancies[:5]
+        text = "Первые 5 вакансий по запросу 'python' в Алматы:\n\n"
+        for index, vacancy in enumerate(five, start=1):
+            text += f"{index}. {vacancy.text}\n"
+        await message.answer(text)
+    else:
+        await message.answer(f"Ошибка при запросе вакансий: {response.status_code}")
 @dp.message(Command('monthly_total'))
 async def monthly_total(message: types.Message):
     user_id = message.from_user.id
@@ -86,6 +162,14 @@ async def monthly_total(message: types.Message):
 async def main():
     database()
     create_settings_table()
+    scheduler.add_job(
+        send_weekly_report, 'cron', day_of_week='mon', hour=9, minute=0
+    )
+    scheduler.add_job(auto_parse_jobs, 'interval', hours=6)
+    scheduler.start()
+
+    # Сразу при запуске бота один раз парсим вакансии, чтобы база не была пустой
+    asyncio.create_task(auto_parse_jobs())
     await bot.set_my_commands([
         BotCommand(command="start", description="Запуск"),
         BotCommand(command="help", description="Помощь"),
