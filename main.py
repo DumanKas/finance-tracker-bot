@@ -187,7 +187,7 @@ async def main():
         BotCommand(command='total_week',description="Траты за неделю"),
         BotCommand(command="monthly_total",description="Траты за месяц"),
         BotCommand(command="new",description="Новые вакаснии"),
-        BotCommand(command='job', description="Просмотр вакансии")
+        BotCommand(command='jobs', description="Просмотр вакансии")
     ])
     await dp.start_polling(bot)
 
