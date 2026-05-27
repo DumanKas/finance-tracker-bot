@@ -109,19 +109,28 @@ async def send_weekly_report():
 
 async def auto_parse_jobs():
     logging.info('Запуск автоматического парсинга вакансий...')
-    url = "https://hh.kz/search/vacancy?text=python&area=160"
+    url = 'https://hh.kz/search/vacancy?text=python&area=160'
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
-        soup = BeautifulSoup(response.text, "html.parser")
-        vacancies = soup.find_all("span", attrs={"data-qa": "serp-item__title-text"})
+        soup = BeautifulSoup(response.text, 'html.parser')
+        vacancies = soup.find_all(
+            'span', attrs={'data-qa': 'serp-item__title-text'}
+        )
         for vacancy in vacancies:
-            save_vacancy(vacancy.text, "https://hh.kz" + vacancy.find_parent("a")["href"])
+            try:
+                # Находим родительскую ссылку, чтобы вытащить href
+                parent_a = vacancy.find_parent('a')
+                if parent_a and 'href' in parent_a.attrs:
+                    full_url = 'https://hh.kz' + parent_a['href']
+                    save_vacancy(vacancy.text, full_url)
+            except Exception as e:
+                logging.error(f'Ошибка сохранения вакансии: {e}')
+        logging.info('Парсинг успешно завершен, новые вакансии в базе!')
     else:
-
-        logging.error(f"Ошибка при запросе вакансий: {response.status_code}")
+        logging.error(f'Ошибка при запросе вакансий: {response.status_code}')
 
 
 @dp.message(Command("new"))
@@ -176,7 +185,9 @@ async def main():
         BotCommand(command="set_limit",description="Поставить лимит трат"),
         BotCommand(command='add',description="Добавить сумму траты"),
         BotCommand(command='total_week',description="Траты за неделю"),
-        BotCommand(command="monthly_total",description="Траты за месяц")
+        BotCommand(command="monthly_total",description="Траты за месяц"),
+        BotCommand(command="new",description="Новые вакаснии"),
+        BotCommand(command='job', description="Просмотр вакансии")
     ])
     await dp.start_polling(bot)
 
