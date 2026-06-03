@@ -2,6 +2,9 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import BotCommand
 import logging
+
+from pyexpat.errors import messages
+
 logging.basicConfig(level=logging.INFO)
 import asyncio
 import os
@@ -107,6 +110,34 @@ async def send_weekly_report():
             pass
 
 
+@dp.message(Command('weather'))
+async def get_almaty_weather(message: types.Message):
+    url = ("https://api.open-meteo.com/v1/forecast"
+        "?latitude=43.2565"
+        "&longitude=76.9285"
+        "&current=temperature_2m,relative_humidity_2m,wind_speed_10m"
+        "&timezone=Asia%2FAlmaty")
+
+
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        current_data = data['...']
+        temp = current_data['...']
+        humidity = current_data['relative-humidity_2m']
+        wind = current_data['wind_speed_10m']
+
+        text = (
+            f"🌦 **Погода в Алматы прямо сейчас:**\n\n"
+            f"🌡 Температура: {temp}°C\n"
+            f"💧 Влажность: {humidity}%\n"
+            f"💨 Ветер: {wind} km/h"
+        )
+        await message.answer(text, parse_mode="Markdown")
+
+    else:
+        await message.answer("⚠️ Не удалось получить данные о погоде.")
+
 async def auto_parse_jobs():
     logging.info('Запуск автоматического парсинга вакансий...')
     url = 'https://hh.kz/search/vacancy?text=python&area=160'
@@ -131,6 +162,27 @@ async def auto_parse_jobs():
         logging.info('Парсинг успешно завершен, новые вакансии в базе!')
     else:
         logging.error(f'Ошибка при запросе вакансий: {response.status_code}')
+
+
+
+
+async def send_daily_vacancies():
+    subscribers = get_subscribers()
+    vacancies = get_new_vacancies(since_hours=6)
+    if not vacancies:
+        return
+
+    text = "🔔 **Свежие Python-вакансии в Алматы за последние 6 часов!**\n\n"
+    for title, url in vacancies:
+        text += f"• {title} - [Перейти к вакансии]{url}\n"
+
+
+    for user_id in subscribers:
+        try:
+            await bot.send_message(user_id,text,parse_mode="Markdown",disable_web_page_preview=True)
+            await asyncio.sleep(0.5)
+        except Exception:
+            pass
 
 
 @dp.message(Command("new"))
