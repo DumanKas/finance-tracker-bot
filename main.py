@@ -2,6 +2,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import BotCommand
 import logging
+import aiohttp
 
 from pyexpat.errors import messages
 
@@ -112,31 +113,32 @@ async def send_weekly_report():
 
 @dp.message(Command('weather'))
 async def get_almaty_weather(message: types.Message):
-    url = ("https://api.open-meteo.com/v1/forecast"
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
         "?latitude=43.2565"
         "&longitude=76.9285"
         "&current=temperature_2m,relative_humidity_2m,wind_speed_10m"
-        "&timezone=Asia%2FAlmaty")
+        "&timezone=Asia%2FAlmaty"
+    )
 
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            if response.status == 200:
+                data = await response.json()
+                current_data = data['current']
+                temp = current_data['temperature_2m']
+                humidity = current_data['relative_humidity_2m']
+                wind = current_data['wind_speed_10m']
 
-    response = requests.get(url)
-    if response.status_code == 200:
-        data = response.json()
-        current_data = data['...']
-        temp = current_data['...']
-        humidity = current_data['relative-humidity_2m']
-        wind = current_data['wind_speed_10m']
-
-        text = (
-            f"🌦 **Погода в Алматы прямо сейчас:**\n\n"
-            f"🌡 Температура: {temp}°C\n"
-            f"💧 Влажность: {humidity}%\n"
-            f"💨 Ветер: {wind} km/h"
-        )
-        await message.answer(text, parse_mode="Markdown")
-
-    else:
-        await message.answer("⚠️ Не удалось получить данные о погоде.")
+                text = (
+                    f"🌦 **Погода в Алматы прямо сейчас:**\n\n"
+                    f"🌡 Температура: {temp}°C\n"
+                    f"💧 Влажность: {humidity}%\n"
+                    f"💨 Ветер: {wind} km/h"
+                )
+                await message.answer(text, parse_mode="Markdown")
+            else:
+                await message.answer("⚠️ Не удалось получить данные о погоде.")
 
 async def auto_parse_jobs():
     logging.info('Запуск автоматического парсинга вакансий...')
