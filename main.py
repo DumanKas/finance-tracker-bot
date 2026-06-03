@@ -110,6 +110,36 @@ async def send_weekly_report():
         except Exception as e:
             pass
 
+@dp.message(Command("rates"))
+async def get_rates(message: types.Message):
+    url = "https://open.er-api.com/v6/latest/KZT"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+
+                if response.status != 200:
+                    await message.answer("❌ Ошибка получения курса валют.")
+                    return
+
+                data = await response.json()
+
+                rates = data["rates"]
+
+                usd = round(1 / rates["USD"], 2)
+                eur = round(1 / rates["EUR"], 2)
+                rub = round(1 / rates["RUB"], 2)
+
+                text = (
+                    "💱 <b>Курс валют к тенге</b>\n\n"
+                    f"🇺🇸 1 USD = {usd} ₸\n"
+                    f"🇪🇺 1 EUR = {eur} ₸\n"
+                    f"🇷🇺 1 RUB = {rub} ₸"
+                )
+
+                await message.answer(text, parse_mode="HTML")
+    except Exception as e:
+        print(f"Ошибка rates: {e}")
+        await message.answer("❌ Не удалось получить курс валют.")
 
 @dp.message(Command('weather'))
 async def get_almaty_weather(message: types.Message):
@@ -164,7 +194,6 @@ async def auto_parse_jobs():
         logging.info('Парсинг успешно завершен, новые вакансии в базе!')
     else:
         logging.error(f'Ошибка при запросе вакансий: {response.status_code}')
-
 
 
 
