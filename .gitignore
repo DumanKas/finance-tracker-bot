@@ -15,3 +15,5 @@ database.db
 # Настройки IDE
 .idea/
 .vscode/
+
+creds.json

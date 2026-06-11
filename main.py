@@ -3,8 +3,9 @@ from aiogram.filters import Command
 from aiogram.types import BotCommand
 import logging
 import aiohttp
-
-from pyexpat.errors import messages
+import gspread
+from google.oauth2.service_account import Credentials
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 import asyncio
@@ -24,6 +25,9 @@ load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+
+
+
 
 @dp.message(Command('start'))
 async def start_command(message: types.Message):
@@ -88,7 +92,6 @@ async def total_week(message: types.Message):
         await message.answer("Трат за неделю нет")
     else:
         await message.answer(f'📊 Ваши траты за последние 7 дней: **{result} тенге**', parse_mode="Markdown")
-
 
 
 
@@ -271,7 +274,8 @@ async def main():
         BotCommand(command="monthly_total",description="Траты за месяц"),
         BotCommand(command="new",description="Новые вакаснии"),
         BotCommand(command='jobs', description="Просмотр вакансии"),
-        BotCommand(command='weather', description="Просмотр текущей погоды Алматы")
+        BotCommand(command='weather', description="Просмотр текущей погоды Алматы"),
+        BotCommand(command='rates', description="Просмотр курса валют")
     ])
     await dp.start_polling(bot)
 
