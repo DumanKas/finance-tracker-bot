@@ -1,11 +1,13 @@
 import sqlite3
 from datetime import datetime
 import gspread
+import json
+import os
 from google.oauth2.service_account import Credentials
-creds = Credentials.from_service_account_file("creds.json",
-                                              scopes=["https://spreadsheets.google.com/feeds",
-                                                      "https://www.googleapis.com/auth/drive"]
-                                              )
+creds_json = json.loads(os.environ["GOOGLE_CREDS"])
+creds = Credentials.from_service_account_info(creds_json,
+    scopes=["https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive"])
 
 gc = gspread.authorize(creds)
 ws = gc.open('finanse-bot').sheet1
