@@ -16,7 +16,7 @@ from bs4 import BeautifulSoup
 from database import (
     database, add_expence, get_today_total, get_weekly_total,
     get_monthly_total, create_settings_table, get_limit,
-    set_daily_limit, get_weekly_stat, get_subscribers, add_to_subscribers,save_vacancy,get_new_vacancies
+    set_daily_limit, get_weekly_stat, get_subscribers, add_to_subscribers,save_vacancy,get_new_vacancies,get_sheets
 )
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -37,6 +37,20 @@ async def start_command(message: types.Message):
 @dp.message(Command('help'))
 async def help_command(message: types.Message):
     await message.answer("📝 Список команд:\n/set_limit + [сумма] - добавить лимит \n/+ [сумма] — добавить расход\n/add [сумма] — добавить расход\n/total_week - Для проверки расходов за неделю\n /monthly_total - Для проверки расходов за месяц")
+
+@dp.message(Command('report'))
+async def report_command(message: types.Message):
+    user_id = int(message.from_user.id)
+    report = get_sheets(user_id)
+
+    if not report:
+        await message.answer("У вас пока нет записей за этот месяц. 🤷‍♂️")
+        return
+    text = "📊 **Ваши расходы по категориям:**\n\n"
+    for category, amount in report.items():
+        text += f"🔹 {category}: {amount} тг\n"
+
+    await message.answer(text, parse_mode="Markdown")
 
 
 @dp.message(Command('set_limit'))
@@ -275,7 +289,8 @@ async def main():
         BotCommand(command="new",description="Новые вакаснии"),
         BotCommand(command='jobs', description="Просмотр вакансии"),
         BotCommand(command='weather', description="Просмотр текущей погоды Алматы"),
-        BotCommand(command='rates', description="Просмотр курса валют")
+        BotCommand(command='rates', description="Просмотр курса валют"),
+        BotCommand(command='report', description="Просмотр категории затрат")
     ])
     await dp.start_polling(bot)
 

@@ -83,6 +83,20 @@ def add_expence(user_id, amount, category = "Общее"):
     conn.close()
     ws.append_row([str(datetime.now().strftime("%d.%m.%Y %H:%M")),user_id,amount,category])
 
+
+def get_sheets(user_id):
+    all_records = ws.get_all_records()
+    totals = {}
+    for row in all_records:
+        if int(row["User ID"]) == user_id:
+            cat = row["Категория"]
+            amount = row["Сумма"]
+            totals[cat] = totals.get(cat, 0) + int(amount)
+    return totals
+
+
+
+
 def get_today_total(user_id):
     conn = sqlite3.connect('/app/data/database.db')
     cursor = conn.cursor()
@@ -134,3 +148,4 @@ def get_limit(user_id):
     result = cursor.fetchone()
     conn.close()
     return result[0] if result else 0
+
