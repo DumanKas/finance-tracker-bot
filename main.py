@@ -64,11 +64,12 @@ async def help_command(message: types.Message):
 
 
 async def send_remind(user_id: int, text: str):
+    logging.info(f"Отправляю напоминание {user_id}: {text}")  # добавь это
     try:
         await bot.send_message(chat_id=user_id, text=f"⏰ Напоминание: {text}")
+        logging.info("Успешно отправлено")
     except Exception as e:
         logging.error(f"Не удалось отправить напоминание: {e}")
-
 
 @dp.message(Command("remind"))
 async def remind_command(message: types.Message):
@@ -93,6 +94,8 @@ async def remind_command(message: types.Message):
     scheduler.add_job(
         send_remind, trigger="date", run_time=run_time, args=(user_id, text)
     )
+    logging.info(f"Джоба добавлена, run_time={run_time}, jobs={scheduler.get_jobs()}")
+
     await message.answer(
         f"✅ Напоминание установлено на {minutes} мин. Я напомню тебе: {text}"
     )
