@@ -10,6 +10,8 @@ from aiogram.types import BotCommand
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from datetime import timezone
+from zoneinfo import ZoneInfo
 
 from database import (
     add_expence,
@@ -36,7 +38,8 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 # Инициализируем планировщик ОДИН раз
-scheduler = AsyncIOScheduler()
+scheduler = AsyncIOScheduler(timezone="Asia/Almaty")
+
 
 
 @dp.message(Command("start"))
@@ -83,7 +86,8 @@ async def remind_command(message: types.Message):
     text = parts[2]
     user_id = message.from_user.id
 
-    run_time = datetime.now() + timedelta(minutes=minutes)
+    run_time = datetime.now(tz=ZoneInfo("Asia/Almaty")) + timedelta(minutes=minutes)
+
 
     # Добавляем задачу в синглтон-планировщик
     scheduler.add_job(
@@ -371,7 +375,12 @@ async def main():
 
     # Настройка крона и интервалов
     scheduler.add_job(
-        send_weekly_report, "cron", day_of_week="mon", hour=9, minute=0
+        send_weekly_report,
+        "cron",
+        day_of_week="mon",
+        hour=9,
+        minute=0,
+        timezone="Asia/Almaty"  # добавить явно
     )
     scheduler.add_job(auto_parse_jobs, "interval", hours=6)
     scheduler.start()
