@@ -92,7 +92,7 @@ async def remind_command(message: types.Message):
 
     # Добавляем задачу в синглтон-планировщик
     scheduler.add_job(
-        send_remind, trigger="date", run_time=run_time, args=(user_id, text)
+        send_remind, trigger="date", run_date=run_time, args=(user_id, text)
     )
     logging.info(f"Джоба добавлена, run_time={run_time}, jobs={scheduler.get_jobs()}")
 
