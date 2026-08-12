@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-OPENMODEL_API_URL = "https://api.openmodel.ai/v1/messages"
-OPENMODEL_MODEL = "deepseek-v4-flash"
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 
 async def analyze_finances(
@@ -16,12 +16,12 @@ async def analyze_finances(
     category_stats: list,
 ) -> str:
 
-    api_key = os.getenv("DEEPSEEK_API_KEY")
+    api_key = os.getenv("OPENROUTER_API_KEY")
 
     if not api_key:
         return (
-            "⚠️ <b>OpenModel пока не настроен.</b>\n\n"
-            "Добавь переменную <code>DEEPSEEK_API_KEY</code> "
+            "⚠️ <b>OpenRouter пока не настроен.</b>\n\n"
+            "Добавь переменную <code>OPENROUTER_API_KEY</code> "
             "в переменные окружения Railway."
         )
 
@@ -65,24 +65,20 @@ async def analyze_finances(
 """
 
     payload = {
-        "model": OPENMODEL_MODEL,
+        "model": OPENROUTER_MODEL,
         "max_tokens": 800,
         "messages": [
-            {
-                "role": "user",
-                "content": (
-                    system_prompt
-                    + "\n\n"
-                    + user_prompt
-                ),
-            }
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
         ],
     }
 
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01",
+        # необязательно, но OpenRouter рекомендует указывать источник запроса
+        "HTTP-Referer": "https://github.com/DumanKas",
+        "X-Title": "FinControl Bot",
     }
 
     try:
@@ -93,16 +89,38 @@ async def analyze_finances(
         ) as session:
 
             async with session.post(
-                OPENMODEL_API_URL,
+                OPENROUTER_API_URL,
                 headers=headers,
                 json=payload,
             ) as response:
 
                 response_text = await response.text()
 
+                if response.status == 429:
+                    print(
+                        f"OpenRouter rate limit: {response_text}"
+                    )
+                    return (
+                        "⏳ Дневной лимит бесплатных запросов "
+                        "к ИИ исчерпан. Попробуй завтра или "
+                        "чуть позже — лимит сбрасывается "
+                        "по времени."
+                    )
+
+                if response.status in (401, 402):
+                    print(
+                        f"OpenRouter billing/auth error "
+                        f"{response.status}: {response_text}"
+                    )
+                    return (
+                        "❌ Проблема с доступом к ИИ "
+                        "(ключ или баланс). Проверь настройки "
+                        "OPENROUTER_API_KEY."
+                    )
+
                 if response.status != 200:
                     print(
-                        f"OpenModel API error "
+                        f"OpenRouter API error "
                         f"{response.status}: "
                         f"{response_text}"
                     )
@@ -115,11 +133,11 @@ async def analyze_finances(
                 data = await response.json()
 
                 try:
-                    return data["content"][0]["text"]
+                    return data["choices"][0]["message"]["content"]
 
                 except (KeyError, IndexError, TypeError):
                     print(
-                        f"Неожиданный ответ OpenModel: {data}"
+                        f"Неожиданный ответ OpenRouter: {data}"
                     )
 
                     return (
@@ -128,12 +146,12 @@ async def analyze_finances(
 
     except asyncio.TimeoutError:
         return (
-            "⏳ OpenModel слишком долго отвечает. "
+            "⏳ ИИ слишком долго отвечает. "
             "Попробуй ещё раз."
         )
 
     except Exception as e:
-        print(f"OpenModel error: {e}")
+        print(f"OpenRouter error: {e}")
 
         return (
             "❌ Произошла ошибка при обращении к ИИ."
