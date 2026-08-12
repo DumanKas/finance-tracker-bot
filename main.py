@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -30,15 +30,10 @@ from database import (
     database,
     get_limit,
     get_monthly_total,
-    get_expenses_by_date,
-    get_expenses_by_period,
-    get_total_by_period,
-    get_category_stats,
     get_new_vacancies,
     get_sheets,
     get_subscribers,
     get_today_total,
-    get_expenses_by_period,
     get_weekly_stat,
     get_weekly_total,
     save_vacancy,
@@ -68,10 +63,19 @@ class AddExpenseState(StatesGroup):
     waiting_for_category = State()
 
 
-class DateSearchState(StatesGroup):
-    waiting_for_day = State()
-    waiting_for_start_date = State()
-    waiting_for_end_date = State()
+# ============================================================
+# MAIN MENU BUTTON TEXTS
+# Используются, чтобы отличать "пользователь нажал кнопку меню"
+# от "пользователь вводит данные для текущего FSM-состояния".
+# ============================================================
+
+MAIN_MENU_BUTTONS = {
+    "➕ Добавить расход",
+    "📊 Статистика",
+    "📅 Поиск по датам",
+    "🗂 Категории",
+    "⚙️ Настройки",
+}
 
 
 # ============================================================
@@ -146,71 +150,6 @@ def cancel_keyboard():
     )
 
 
-def date_search_keyboard():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="📅 Сегодня",
-                    callback_data="date_search:today",
-                ),
-                InlineKeyboardButton(
-                    text="◀️ Вчера",
-                    callback_data="date_search:yesterday",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📆 Эта неделя",
-                    callback_data="date_search:week",
-                ),
-                InlineKeyboardButton(
-                    text="🗓 Этот месяц",
-                    callback_data="date_search:month",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📅 Конкретный день",
-                    callback_data="date_search:day",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📆 Свой период",
-                    callback_data="date_search:custom",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="❌ Отмена",
-                    callback_data="date_search:cancel",
-                )
-            ],
-        ]
-    )
-
-
-def format_expenses_report(title, expenses):
-    if not expenses:
-        return f"📅 <b>{title}</b>\n\nРасходов за этот период нет."
-
-    total = sum(row[1] for row in expenses)
-    text = f"📅 <b>{title}</b>\n\n"
-
-    for expense_id, amount, category, created_at in expenses:
-        try:
-            dt = datetime.fromisoformat(str(created_at))
-            time_text = dt.strftime("%H:%M")
-        except (ValueError, TypeError):
-            time_text = str(created_at)
-
-        text += f"• {time_text} — {category}: <b>{amount:,} ₸</b>\n"
-
-    text += f"\n━━━━━━━━━━━━\n💰 <b>Итого: {total:,} ₸</b>"
-    return text
-
-
 # ============================================================
 # START / HELP
 # ============================================================
@@ -232,140 +171,13 @@ async def start_command(message: types.Message):
     )
 
 
-
-
-# ============================================================
-# FINANCE BOT 2.1 — MAIN MENU
-# ============================================================
-
-@dp.callback_query(lambda callback: callback.data == "menu:add")
-async def menu_add_expense(callback: types.CallbackQuery, state: FSMContext):
-    await state.clear()
-    await state.set_state(AddExpenseState.waiting_for_amount)
-    await callback.message.edit_text(
-        "➕ <b>Добавление расхода</b>\n\n"
-        "Введи сумму в тенге:\n"
-        "<code>1500</code>",
-        parse_mode="HTML",
-        reply_markup=cancel_keyboard(),
-    )
-    await callback.answer()
-
-
-@dp.message(AddExpenseState.waiting_for_amount)
-async def process_expense_amount(message: types.Message, state: FSMContext):
-    raw = (message.text or "").replace(" ", "").replace(",", "").strip()
-
-    if not raw.isdigit() or int(raw) <= 0:
-        await message.answer("⚠️ Введи положительную сумму числом. Например: <code>1500</code>", parse_mode="HTML")
-        return
-
-    await state.update_data(amount=int(raw))
-    await state.set_state(AddExpenseState.waiting_for_category)
-
-    await message.answer(
-        "🗂 Теперь выбери категорию:",
-        reply_markup=category_keyboard(),
-    )
-
-
-@dp.callback_query(lambda callback: callback.data.startswith("expense_category:"))
-async def process_expense_category(callback: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    amount = data.get("amount")
-
-    if not amount:
-        await state.clear()
-        await callback.message.edit_text("⚠️ Сессия добавления устарела. Начни заново.")
-        await callback.answer()
-        return
-
-    category = callback.data.split(":", 1)[1]
-    user_id = callback.from_user.id
-
-    add_expence(user_id, int(amount), category)
-
-    total_today = get_today_total(user_id)
-    limit = get_limit(user_id)
-
-    if limit > 0:
-        remaining = limit - total_today
-        status = (
-            f"\n✅ Остаток на день: {remaining:,} ₸."
-            if remaining >= 0
-            else f"\n⚠️ Перерасход: {abs(remaining):,} ₸!"
-        )
-    else:
-        status = "\n💡 Лимит не установлен."
-
-    await state.clear()
-
-    await callback.message.edit_text(
-        f"✅ <b>Расход записан</b>\n\n"
-        f"💸 Сумма: <b>{int(amount):,} ₸</b>\n"
-        f"🗂 Категория: <b>{category}</b>\n"
-        f"💰 Сегодня: <b>{total_today:,} ₸</b>{status}",
-        parse_mode="HTML",
-    )
-    await callback.message.answer("Главное меню:", reply_markup=main_menu_keyboard())
-    await callback.answer()
-
-
-@dp.callback_query(lambda callback: callback.data == "expense_cancel")
-async def cancel_expense(callback: types.CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.edit_text("❌ Действие отменено.")
-    await callback.message.answer("Главное меню:", reply_markup=main_menu_keyboard())
-    await callback.answer()
-
-
-@dp.callback_query(lambda callback: callback.data == "menu:stats")
-async def menu_stats(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    stats = get_category_stats(user_id)
-    await callback.message.edit_text(
-        format_category_stats(stats, "📊 Все расходы по категориям"),
-        parse_mode="HTML",
-        reply_markup=main_menu_keyboard(),
-    )
-    await callback.answer()
-
-
-@dp.callback_query(lambda callback: callback.data == "menu:categories")
-async def menu_categories(callback: types.CallbackQuery):
-    stats = get_category_stats(callback.from_user.id)
-
-    if not stats:
-        text = "🗂 <b>Категории</b>\n\nПока нет расходов."
-    else:
-        text = format_category_stats(stats, "🗂 Распределение по категориям")
-
-    await callback.message.edit_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=main_menu_keyboard(),
-    )
-    await callback.answer()
-
-
-@dp.callback_query(lambda callback: callback.data == "menu:dates")
-async def menu_dates(callback: types.CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.edit_text(
-        "📅 <b>Поиск расходов</b>\n\nВыбери период:",
-        parse_mode="HTML",
-        reply_markup=date_search_keyboard(),
-    )
-    await callback.answer()
-
-
 @dp.message(Command("help"))
 async def help_command(message: types.Message):
     await message.answer(
         "📝 <b>Finance Bot 2.0</b>\n\n"
         "➕ Добавить расход — добавить трату через кнопки\n"
         "📊 Статистика — расходы сегодня, за неделю и месяц\n"
-        "📅 Поиск по датам — поиск за день или период\n"
+        "📅 Поиск по датам — будет добавлен следующим этапом\n"
         "🗂 Категории — статистика по категориям\n"
         "⚙️ Настройки — дневной лимит\n\n"
         "Старые команды тоже работают:\n"
@@ -402,6 +214,23 @@ async def process_expense_amount(message: types.Message, state: FSMContext):
     if not message.text:
         return
 
+    # Пользователь нажал кнопку главного меню, вместо того чтобы
+    # ввести сумму — сбрасываем состояние и отдаём управление
+    # обычным обработчикам меню (они зарегистрированы ниже).
+    if message.text in MAIN_MENU_BUTTONS:
+        await state.clear()
+
+        if message.text == "➕ Добавить расход":
+            return await add_expense_start(message, state)
+        elif message.text == "📊 Статистика":
+            return await statistics_menu(message)
+        elif message.text == "📅 Поиск по датам":
+            return await date_search(message)
+        elif message.text == "🗂 Категории":
+            return await categories_menu(message)
+        elif message.text == "⚙️ Настройки":
+            return await settings_menu(message)
+
     amount_raw = message.text.strip().replace(" ", "").replace(",", "")
 
     if not amount_raw.isdigit():
@@ -433,13 +262,46 @@ async def process_expense_amount(message: types.Message, state: FSMContext):
     )
 
 
+@dp.message(AddExpenseState.waiting_for_category)
+async def process_expense_category_menu_interrupt(
+        message: types.Message, state: FSMContext
+):
+    """
+    Пока ждём выбора категории (через inline-кнопки), пользователь
+    может нажать кнопку из ReplyKeyboard главного меню — это придёт
+    сюда как обычное текстовое сообщение. Обрабатываем так же, как
+    и в process_expense_amount: сбрасываем состояние и передаём
+    управление нужному обработчику.
+    """
+    if not message.text:
+        return
+
+    if message.text in MAIN_MENU_BUTTONS:
+        await state.clear()
+
+        if message.text == "➕ Добавить расход":
+            return await add_expense_start(message, state)
+        elif message.text == "📊 Статистика":
+            return await statistics_menu(message)
+        elif message.text == "📅 Поиск по датам":
+            return await date_search(message)
+        elif message.text == "🗂 Категории":
+            return await categories_menu(message)
+        elif message.text == "⚙️ Настройки":
+            return await settings_menu(message)
+
+    await message.answer(
+        "Пожалуйста, выбери категорию, нажав на одну из кнопок выше 👆",
+    )
+
+
 @dp.callback_query(
     AddExpenseState.waiting_for_category,
     lambda callback: callback.data.startswith("expense_category:")
 )
 async def process_expense_category(
-    callback: types.CallbackQuery,
-    state: FSMContext,
+        callback: types.CallbackQuery,
+        state: FSMContext,
 ):
     category = callback.data.split(":", 1)[1]
 
@@ -497,8 +359,8 @@ async def process_expense_category(
     lambda callback: callback.data == "expense_cancel"
 )
 async def cancel_expense(
-    callback: types.CallbackQuery,
-    state: FSMContext,
+        callback: types.CallbackQuery,
+        state: FSMContext,
 ):
     await state.clear()
 
@@ -572,269 +434,28 @@ async def categories_menu(message: types.Message):
 
 
 # ============================================================
-# DATE SEARCH
+# DATE SEARCH — TEMPORARY STUB
 # ============================================================
 
 @dp.message(lambda message: message.text == "📅 Поиск по датам")
-async def date_search(message: types.Message, state: FSMContext):
-    await state.clear()
-
+async def date_search(message: types.Message):
     await message.answer(
-        "📅 <b>Поиск расходов</b>\n\n"
-        "Выбери нужный период:",
-        parse_mode="HTML",
-        reply_markup=date_search_keyboard(),
-    )
-
-
-# ============================================================
-# DATE SEARCH — UNIFIED HANDLER
-# ============================================================
-
-async def send_date_report(message, user_id, start, end, title):
-    if start == end:
-        expenses = get_expenses_by_date(user_id, start.isoformat())
-    else:
-        expenses = get_expenses_by_period(
-            user_id,
-            start.isoformat(),
-            end.isoformat(),
-        )
-
-    await message.answer(
-        format_expenses_report(title, expenses),
+        "📅 <b>Поиск по датам</b>\n\n"
+        "Эта функция будет следующим этапом.\n\n"
+        "Сделаем выбор:\n"
+        "• Сегодня\n"
+        "• Вчера\n"
+        "• Эта неделя\n"
+        "• Этот месяц\n"
+        "• Свой период",
         parse_mode="HTML",
         reply_markup=main_menu_keyboard(),
     )
 
 
-@dp.callback_query(
-    lambda callback: callback.data.startswith("date_search:")
-)
-async def process_date_search(
-    callback: types.CallbackQuery,
-    state: FSMContext,
-):
-    action = callback.data.split(":", 1)[1]
-    user_id = callback.from_user.id
-    today = datetime.now(ZoneInfo("Asia/Almaty")).date()
-
-    if action == "cancel":
-        await state.clear()
-        await callback.message.edit_text("❌ Поиск отменён.")
-        await callback.message.answer(
-            "Главное меню:",
-            reply_markup=main_menu_keyboard(),
-        )
-        await callback.answer()
-        return
-
-    if action == "today":
-        await state.clear()
-        await callback.message.edit_text("🔎 Ищу расходы за сегодня...")
-        await send_date_report(
-            callback.message,
-            user_id,
-            today,
-            today,
-            f"Сегодня — {today.strftime('%d.%m.%Y')}",
-        )
-        await callback.answer()
-        return
-
-    if action == "yesterday":
-        day = today - timedelta(days=1)
-        await state.clear()
-        await callback.message.edit_text("🔎 Ищу расходы за вчера...")
-        await send_date_report(
-            callback.message,
-            user_id,
-            day,
-            day,
-            f"Вчера — {day.strftime('%d.%m.%Y')}",
-        )
-        await callback.answer()
-        return
-
-    if action == "week":
-        start = today - timedelta(days=6)
-        await state.clear()
-        await callback.message.edit_text("🔎 Ищу расходы за последние 7 дней...")
-        await send_date_report(
-            callback.message,
-            user_id,
-            start,
-            today,
-            f"Последние 7 дней — {start.strftime('%d.%m')}–{today.strftime('%d.%m.%Y')}",
-        )
-        await callback.answer()
-        return
-
-    if action == "month":
-        start = today.replace(day=1)
-        await state.clear()
-        await callback.message.edit_text("🔎 Ищу расходы за текущий месяц...")
-        await send_date_report(
-            callback.message,
-            user_id,
-            start,
-            today,
-            f"Текущий месяц — {start.strftime('%d.%m.%Y')}–{today.strftime('%d.%m.%Y')}",
-        )
-        await callback.answer()
-        return
-
-    if action == "day":
-        await state.set_state(DateSearchState.waiting_for_day)
-        await callback.message.edit_text(
-            "📅 <b>Поиск за конкретный день</b>\n\n"
-            "Введи дату в формате:\n"
-            "<code>12.08.2026</code>",
-            parse_mode="HTML",
-            reply_markup=cancel_keyboard(),
-        )
-        await callback.answer()
-        return
-
-    if action == "custom":
-        await state.set_state(DateSearchState.waiting_for_start_date)
-        await callback.message.edit_text(
-            "📆 <b>Свой период</b>\n\n"
-            "Введи начальную дату:\n"
-            "<code>01.08.2026</code>",
-            parse_mode="HTML",
-            reply_markup=cancel_keyboard(),
-        )
-        await callback.answer()
-        return
-
-    await callback.answer("Неизвестный период.")
-
-
-@dp.message(DateSearchState.waiting_for_day)
-async def process_single_day(message: types.Message, state: FSMContext):
-    raw = (message.text or "").strip()
-
-    try:
-        day = datetime.strptime(raw, "%d.%m.%Y").date()
-    except ValueError:
-        await message.answer(
-            "⚠️ Неверный формат даты.\n\n"
-            "Используй, например: <code>12.08.2026</code>",
-            parse_mode="HTML",
-        )
-        return
-
-    today = datetime.now(ZoneInfo("Asia/Almaty")).date()
-
-    if day > today:
-        await message.answer("⚠️ Нельзя искать расходы в будущем.")
-        return
-
-    await state.clear()
-
-    expenses = get_expenses_by_date(
-        message.from_user.id,
-        day.isoformat(),
-    )
-
-    await message.answer(
-        format_expenses_report(
-            f"Расходы за {day.strftime('%d.%m.%Y')}",
-            expenses,
-        ),
-        parse_mode="HTML",
-        reply_markup=main_menu_keyboard(),
-    )
-
-
-@dp.message(DateSearchState.waiting_for_start_date)
-async def process_start_date(
-    message: types.Message,
-    state: FSMContext,
-):
-    raw = (message.text or "").strip()
-
-    try:
-        start = datetime.strptime(raw, "%d.%m.%Y").date()
-    except ValueError:
-        await message.answer(
-            "⚠️ Неверный формат.\n\n"
-            "Используй: <code>01.08.2026</code>",
-            parse_mode="HTML",
-        )
-        return
-
-    today = datetime.now(ZoneInfo("Asia/Almaty")).date()
-
-    if start > today:
-        await message.answer("⚠️ Начальная дата не может быть в будущем.")
-        return
-
-    await state.update_data(start_date=start.isoformat())
-    await state.set_state(DateSearchState.waiting_for_end_date)
-
-    await message.answer(
-        "📆 Теперь введи конечную дату:\n"
-        "<code>12.08.2026</code>",
-        parse_mode="HTML",
-        reply_markup=cancel_keyboard(),
-    )
-
-
-@dp.message(DateSearchState.waiting_for_end_date)
-async def process_end_date(
-    message: types.Message,
-    state: FSMContext,
-):
-    raw = (message.text or "").strip()
-
-    try:
-        end = datetime.strptime(raw, "%d.%m.%Y").date()
-    except ValueError:
-        await message.answer(
-            "⚠️ Неверный формат.\n\n"
-            "Используй: <code>12.08.2026</code>",
-            parse_mode="HTML",
-        )
-        return
-
-    data = await state.get_data()
-
-    try:
-        start = date.fromisoformat(data["start_date"])
-    except (KeyError, ValueError):
-        await state.clear()
-        await message.answer(
-            "⚠️ Не удалось определить начальную дату. Начни поиск заново.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-
-    if end < start:
-        await message.answer(
-            "⚠️ Конечная дата не может быть раньше начальной."
-        )
-        return
-
-    today = datetime.now(ZoneInfo("Asia/Almaty")).date()
-
-    if end > today:
-        await message.answer(
-            "⚠️ Конечная дата не может быть в будущем."
-        )
-        return
-
-    await state.clear()
-
-    await send_date_report(
-        message,
-        message.from_user.id,
-        start,
-        end,
-        f"{start.strftime('%d.%m.%Y')} — {end.strftime('%d.%m.%Y')}",
-    )
-
+# ============================================================
+# SETTINGS
+# ============================================================
 
 @dp.message(lambda message: message.text == "⚙️ Настройки")
 async def settings_menu(message: types.Message):
@@ -1108,7 +729,6 @@ async def get_rates(message: types.Message):
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
-
                 if response.status != 200:
                     await message.answer(
                         "❌ Ошибка получения курса валют."
@@ -1212,8 +832,8 @@ async def auto_parse_jobs():
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                url,
-                headers=headers,
+                    url,
+                    headers=headers,
             ) as response:
 
                 if response.status == 200:
@@ -1236,8 +856,8 @@ async def auto_parse_jobs():
 
                             if parent_a and "href" in parent_a.attrs:
                                 full_url = (
-                                    "https://hh.kz"
-                                    + parent_a["href"]
+                                        "https://hh.kz"
+                                        + parent_a["href"]
                                 )
 
                                 save_vacancy(
@@ -1333,8 +953,8 @@ async def jobs_command(message: types.Message):
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                url,
-                headers=headers,
+                    url,
+                    headers=headers,
             ) as response:
 
                 if response.status == 200:
@@ -1360,8 +980,8 @@ async def jobs_command(message: types.Message):
                     )
 
                     for index, vacancy in enumerate(
-                        five,
-                        start=1,
+                            five,
+                            start=1,
                     ):
                         text += (
                             f"{index}. "
