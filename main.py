@@ -69,6 +69,7 @@ class AddExpenseState(StatesGroup):
 
 
 class DateSearchState(StatesGroup):
+    waiting_for_day = State()
     waiting_for_start_date = State()
     waiting_for_end_date = State()
 
@@ -167,6 +168,12 @@ def date_search_keyboard():
                     text="🗓 Этот месяц",
                     callback_data="date_search:month",
                 ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📅 Конкретный день",
+                    callback_data="date_search:day",
+                )
             ],
             [
                 InlineKeyboardButton(
@@ -352,140 +359,13 @@ async def menu_dates(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@dp.callback_query(lambda callback: callback.data.startswith("date_search:"))
-async def process_date_search(callback: types.CallbackQuery, state: FSMContext):
-    action = callback.data.split(":", 1)[1]
-    user_id = callback.from_user.id
-
-    if action == "cancel":
-        await state.clear()
-        await callback.message.edit_text("❌ Поиск отменён.")
-        await callback.message.answer("Главное меню:", reply_markup=main_menu_keyboard())
-        await callback.answer()
-        return
-
-    today = datetime.now(ZoneInfo("Asia/Almaty")).date()
-
-    if action == "today":
-        start = end = today
-        title = f"Сегодня — {today.strftime('%d.%m.%Y')}"
-    elif action == "yesterday":
-        start = end = today - timedelta(days=1)
-        title = f"Вчера — {start.strftime('%d.%m.%Y')}"
-    elif action == "week":
-        start = today - timedelta(days=6)
-        end = today
-        title = f"Последние 7 дней — {start.strftime('%d.%m')}–{end.strftime('%d.%m.%Y')}"
-    elif action == "month":
-        start = today.replace(day=1)
-        end = today
-        title = f"Текущий месяц — {start.strftime('%d.%m.%Y')}–{end.strftime('%d.%m.%Y')}"
-    elif action == "custom":
-        await state.set_state(DateSearchState.waiting_for_start_date)
-        await callback.message.edit_text(
-            "📆 <b>Свой период</b>\n\n"
-            "Введи начальную дату:\n"
-            "<code>01.08.2026</code>",
-            parse_mode="HTML",
-            reply_markup=cancel_keyboard(),
-        )
-        await callback.answer()
-        return
-    else:
-        await callback.answer("Неизвестный период.")
-        return
-
-    expenses = get_expenses_by_period(user_id, start.isoformat(), end.isoformat())
-    await state.clear()
-
-    await callback.message.edit_text(
-        format_expenses_report(title, expenses),
-        parse_mode="HTML",
-        reply_markup=main_menu_keyboard(),
-    )
-    await callback.answer()
-
-
-@dp.message(DateSearchState.waiting_for_start_date)
-async def process_start_date(message: types.Message, state: FSMContext):
-    raw = (message.text or "").strip()
-
-    try:
-        start = datetime.strptime(raw, "%d.%m.%Y").date()
-    except ValueError:
-        await message.answer(
-            "⚠️ Неверный формат. Используй: <code>01.08.2026</code>",
-            parse_mode="HTML",
-        )
-        return
-
-    today = datetime.now(ZoneInfo("Asia/Almaty")).date()
-    if start > today:
-        await message.answer("⚠️ Начальная дата не может быть в будущем.")
-        return
-
-    await state.update_data(start_date=start.isoformat())
-    await state.set_state(DateSearchState.waiting_for_end_date)
-
-    await message.answer(
-        "📆 Теперь введи конечную дату:\n"
-        "<code>12.08.2026</code>",
-        parse_mode="HTML",
-        reply_markup=cancel_keyboard(),
-    )
-
-
-@dp.message(DateSearchState.waiting_for_end_date)
-async def process_end_date(message: types.Message, state: FSMContext):
-    raw = (message.text or "").strip()
-
-    try:
-        end = datetime.strptime(raw, "%d.%m.%Y").date()
-    except ValueError:
-        await message.answer(
-            "⚠️ Неверный формат. Используй: <code>12.08.2026</code>",
-            parse_mode="HTML",
-        )
-        return
-
-    data = await state.get_data()
-    start = date.fromisoformat(data["start_date"])
-
-    if end < start:
-        await message.answer("⚠️ Конечная дата не может быть раньше начальной.")
-        return
-
-    today = datetime.now(ZoneInfo("Asia/Almaty")).date()
-    if end > today:
-        await message.answer("⚠️ Конечная дата не может быть в будущем.")
-        return
-
-    expenses = get_expenses_by_period(
-        message.from_user.id,
-        start.isoformat(),
-        end.isoformat(),
-    )
-
-    await state.clear()
-
-    await message.answer(
-        format_expenses_report(
-            f"{start.strftime('%d.%m.%Y')} — {end.strftime('%d.%m.%Y')}",
-            expenses,
-        ),
-        parse_mode="HTML",
-        reply_markup=main_menu_keyboard(),
-    )
-
-
-
 @dp.message(Command("help"))
 async def help_command(message: types.Message):
     await message.answer(
         "📝 <b>Finance Bot 2.0</b>\n\n"
         "➕ Добавить расход — добавить трату через кнопки\n"
         "📊 Статистика — расходы сегодня, за неделю и месяц\n"
-        "📅 Поиск по датам — будет добавлен следующим этапом\n"
+        "📅 Поиск по датам — поиск за день или период\n"
         "🗂 Категории — статистика по категориям\n"
         "⚙️ Настройки — дневной лимит\n\n"
         "Старые команды тоже работают:\n"
@@ -707,13 +587,37 @@ async def date_search(message: types.Message, state: FSMContext):
     )
 
 
-@dp.callback_query(lambda callback: callback.data.startswith("date_search:"))
+# ============================================================
+# DATE SEARCH — UNIFIED HANDLER
+# ============================================================
+
+async def send_date_report(message, user_id, start, end, title):
+    if start == end:
+        expenses = get_expenses_by_date(user_id, start.isoformat())
+    else:
+        expenses = get_expenses_by_period(
+            user_id,
+            start.isoformat(),
+            end.isoformat(),
+        )
+
+    await message.answer(
+        format_expenses_report(title, expenses),
+        parse_mode="HTML",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@dp.callback_query(
+    lambda callback: callback.data.startswith("date_search:")
+)
 async def process_date_search(
     callback: types.CallbackQuery,
     state: FSMContext,
 ):
     action = callback.data.split(":", 1)[1]
     user_id = callback.from_user.id
+    today = datetime.now(ZoneInfo("Asia/Almaty")).date()
 
     if action == "cancel":
         await state.clear()
@@ -725,40 +629,78 @@ async def process_date_search(
         await callback.answer()
         return
 
-    today = datetime.now(ZoneInfo("Asia/Almaty")).date()
-
     if action == "today":
-        start = today
-        end = today
-        title = f"Сегодня — {today.strftime('%d.%m.%Y')}"
+        await state.clear()
+        await callback.message.edit_text("🔎 Ищу расходы за сегодня...")
+        await send_date_report(
+            callback.message,
+            user_id,
+            today,
+            today,
+            f"Сегодня — {today.strftime('%d.%m.%Y')}",
+        )
+        await callback.answer()
+        return
 
-    elif action == "yesterday":
-        start = today - timedelta(days=1)
-        end = start
-        title = f"Вчера — {start.strftime('%d.%m.%Y')}"
+    if action == "yesterday":
+        day = today - timedelta(days=1)
+        await state.clear()
+        await callback.message.edit_text("🔎 Ищу расходы за вчера...")
+        await send_date_report(
+            callback.message,
+            user_id,
+            day,
+            day,
+            f"Вчера — {day.strftime('%d.%m.%Y')}",
+        )
+        await callback.answer()
+        return
 
-    elif action == "week":
+    if action == "week":
         start = today - timedelta(days=6)
-        end = today
-        title = (
-            f"Последние 7 дней — "
-            f"{start.strftime('%d.%m')}–{end.strftime('%d.%m.%Y')}"
+        await state.clear()
+        await callback.message.edit_text("🔎 Ищу расходы за последние 7 дней...")
+        await send_date_report(
+            callback.message,
+            user_id,
+            start,
+            today,
+            f"Последние 7 дней — {start.strftime('%d.%m')}–{today.strftime('%d.%m.%Y')}",
         )
+        await callback.answer()
+        return
 
-    elif action == "month":
+    if action == "month":
         start = today.replace(day=1)
-        end = today
-        title = (
-            f"Текущий месяц — "
-            f"{start.strftime('%d.%m.%Y')}–{end.strftime('%d.%m.%Y')}"
+        await state.clear()
+        await callback.message.edit_text("🔎 Ищу расходы за текущий месяц...")
+        await send_date_report(
+            callback.message,
+            user_id,
+            start,
+            today,
+            f"Текущий месяц — {start.strftime('%d.%m.%Y')}–{today.strftime('%d.%m.%Y')}",
         )
+        await callback.answer()
+        return
 
-    elif action == "custom":
+    if action == "day":
+        await state.set_state(DateSearchState.waiting_for_day)
+        await callback.message.edit_text(
+            "📅 <b>Поиск за конкретный день</b>\n\n"
+            "Введи дату в формате:\n"
+            "<code>12.08.2026</code>",
+            parse_mode="HTML",
+            reply_markup=cancel_keyboard(),
+        )
+        await callback.answer()
+        return
+
+    if action == "custom":
         await state.set_state(DateSearchState.waiting_for_start_date)
-
         await callback.message.edit_text(
             "📆 <b>Свой период</b>\n\n"
-            "Введи начальную дату в формате:\n"
+            "Введи начальную дату:\n"
             "<code>01.08.2026</code>",
             parse_mode="HTML",
             reply_markup=cancel_keyboard(),
@@ -766,29 +708,44 @@ async def process_date_search(
         await callback.answer()
         return
 
-    else:
-        await callback.answer("Неизвестный период.")
+    await callback.answer("Неизвестный период.")
+
+
+@dp.message(DateSearchState.waiting_for_day)
+async def process_single_day(message: types.Message, state: FSMContext):
+    raw = (message.text or "").strip()
+
+    try:
+        day = datetime.strptime(raw, "%d.%m.%Y").date()
+    except ValueError:
+        await message.answer(
+            "⚠️ Неверный формат даты.\n\n"
+            "Используй, например: <code>12.08.2026</code>",
+            parse_mode="HTML",
+        )
         return
 
-    expenses = get_expenses_by_period(
-        user_id,
-        start.isoformat(),
-        end.isoformat(),
-    )
+    today = datetime.now(ZoneInfo("Asia/Almaty")).date()
+
+    if day > today:
+        await message.answer("⚠️ Нельзя искать расходы в будущем.")
+        return
 
     await state.clear()
 
-    await callback.message.edit_text(
-        format_expenses_report(title, expenses),
-        parse_mode="HTML",
+    expenses = get_expenses_by_date(
+        message.from_user.id,
+        day.isoformat(),
     )
 
-    await callback.message.answer(
-        "Главное меню:",
+    await message.answer(
+        format_expenses_report(
+            f"Расходы за {day.strftime('%d.%m.%Y')}",
+            expenses,
+        ),
+        parse_mode="HTML",
         reply_markup=main_menu_keyboard(),
     )
-
-    await callback.answer()
 
 
 @dp.message(DateSearchState.waiting_for_start_date)
@@ -802,8 +759,8 @@ async def process_start_date(
         start = datetime.strptime(raw, "%d.%m.%Y").date()
     except ValueError:
         await message.answer(
-            "⚠️ Неверный формат. Введи дату так:\n"
-            "<code>01.08.2026</code>",
+            "⚠️ Неверный формат.\n\n"
+            "Используй: <code>01.08.2026</code>",
             parse_mode="HTML",
         )
         return
@@ -811,9 +768,7 @@ async def process_start_date(
     today = datetime.now(ZoneInfo("Asia/Almaty")).date()
 
     if start > today:
-        await message.answer(
-            "⚠️ Начальная дата не может быть в будущем."
-        )
+        await message.answer("⚠️ Начальная дата не может быть в будущем.")
         return
 
     await state.update_data(start_date=start.isoformat())
@@ -838,8 +793,8 @@ async def process_end_date(
         end = datetime.strptime(raw, "%d.%m.%Y").date()
     except ValueError:
         await message.answer(
-            "⚠️ Неверный формат. Введи дату так:\n"
-            "<code>12.08.2026</code>",
+            "⚠️ Неверный формат.\n\n"
+            "Используй: <code>12.08.2026</code>",
             parse_mode="HTML",
         )
         return
@@ -851,7 +806,8 @@ async def process_end_date(
     except (KeyError, ValueError):
         await state.clear()
         await message.answer(
-            "⚠️ Сессия поиска устарела. Начни поиск заново."
+            "⚠️ Не удалось определить начальную дату. Начни поиск заново.",
+            reply_markup=main_menu_keyboard(),
         )
         return
 
@@ -869,63 +825,16 @@ async def process_end_date(
         )
         return
 
-    expenses = get_expenses_by_period(
+    await state.clear()
+
+    await send_date_report(
+        message,
         message.from_user.id,
-        start.isoformat(),
-        end.isoformat(),
+        start,
+        end,
+        f"{start.strftime('%d.%m.%Y')} — {end.strftime('%d.%m.%Y')}",
     )
 
-    await state.clear()
-
-    title = (
-        f"{start.strftime('%d.%m.%Y')} — "
-        f"{end.strftime('%d.%m.%Y')}"
-    )
-
-    await message.answer(
-        format_expenses_report(title, expenses),
-        parse_mode="HTML",
-        reply_markup=main_menu_keyboard(),
-    )
-
-
-@dp.callback_query(
-    DateSearchState.waiting_for_start_date,
-    lambda callback: callback.data == "expense_cancel",
-)
-async def cancel_date_search_from_start(
-    callback: types.CallbackQuery,
-    state: FSMContext,
-):
-    await state.clear()
-    await callback.message.edit_text("❌ Поиск отменён.")
-    await callback.message.answer(
-        "Главное меню:",
-        reply_markup=main_menu_keyboard(),
-    )
-    await callback.answer()
-
-
-@dp.callback_query(
-    DateSearchState.waiting_for_end_date,
-    lambda callback: callback.data == "expense_cancel",
-)
-async def cancel_date_search_from_end(
-    callback: types.CallbackQuery,
-    state: FSMContext,
-):
-    await state.clear()
-    await callback.message.edit_text("❌ Поиск отменён.")
-    await callback.message.answer(
-        "Главное меню:",
-        reply_markup=main_menu_keyboard(),
-    )
-    await callback.answer()
-
-
-# ============================================================
-# SETTINGS
-# ============================================================
 
 @dp.message(lambda message: message.text == "⚙️ Настройки")
 async def settings_menu(message: types.Message):
