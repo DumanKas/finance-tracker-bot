@@ -64,6 +64,21 @@ class AddExpenseState(StatesGroup):
 
 
 # ============================================================
+# MAIN MENU BUTTON TEXTS
+# Используются, чтобы отличать "пользователь нажал кнопку меню"
+# от "пользователь вводит данные для текущего FSM-состояния".
+# ============================================================
+
+MAIN_MENU_BUTTONS = {
+    "➕ Добавить расход",
+    "📊 Статистика",
+    "📅 Поиск по датам",
+    "🗂 Категории",
+    "⚙️ Настройки",
+}
+
+
+# ============================================================
 # KEYBOARDS
 # ============================================================
 
@@ -199,6 +214,23 @@ async def process_expense_amount(message: types.Message, state: FSMContext):
     if not message.text:
         return
 
+    # Пользователь нажал кнопку главного меню, вместо того чтобы
+    # ввести сумму — сбрасываем состояние и отдаём управление
+    # обычным обработчикам меню (они зарегистрированы ниже).
+    if message.text in MAIN_MENU_BUTTONS:
+        await state.clear()
+
+        if message.text == "➕ Добавить расход":
+            return await add_expense_start(message, state)
+        elif message.text == "📊 Статистика":
+            return await statistics_menu(message)
+        elif message.text == "📅 Поиск по датам":
+            return await date_search(message)
+        elif message.text == "🗂 Категории":
+            return await categories_menu(message)
+        elif message.text == "⚙️ Настройки":
+            return await settings_menu(message)
+
     amount_raw = message.text.strip().replace(" ", "").replace(",", "")
 
     if not amount_raw.isdigit():
@@ -227,6 +259,39 @@ async def process_expense_amount(message: types.Message, state: FSMContext):
         "Теперь выбери категорию:",
         parse_mode="HTML",
         reply_markup=category_keyboard(),
+    )
+
+
+@dp.message(AddExpenseState.waiting_for_category)
+async def process_expense_category_menu_interrupt(
+    message: types.Message, state: FSMContext
+):
+    """
+    Пока ждём выбора категории (через inline-кнопки), пользователь
+    может нажать кнопку из ReplyKeyboard главного меню — это придёт
+    сюда как обычное текстовое сообщение. Обрабатываем так же, как
+    и в process_expense_amount: сбрасываем состояние и передаём
+    управление нужному обработчику.
+    """
+    if not message.text:
+        return
+
+    if message.text in MAIN_MENU_BUTTONS:
+        await state.clear()
+
+        if message.text == "➕ Добавить расход":
+            return await add_expense_start(message, state)
+        elif message.text == "📊 Статистика":
+            return await statistics_menu(message)
+        elif message.text == "📅 Поиск по датам":
+            return await date_search(message)
+        elif message.text == "🗂 Категории":
+            return await categories_menu(message)
+        elif message.text == "⚙️ Настройки":
+            return await settings_menu(message)
+
+    await message.answer(
+        "Пожалуйста, выбери категорию, нажав на одну из кнопок выше 👆",
     )
 
 
