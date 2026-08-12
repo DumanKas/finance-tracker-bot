@@ -1,9 +1,12 @@
 import os
 import aiohttp
 import asyncio
+from dotenv import load_dotenv
 
-DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
-DEEPSEEK_MODEL = "deepseek-v4-flash"
+load_dotenv()
+
+OPENMODEL_API_URL = "https://api.openmodel.ai/v1/messages"
+OPENMODEL_MODEL = "deepseek-v4-flash"
 
 
 async def analyze_finances(
@@ -17,7 +20,7 @@ async def analyze_finances(
 
     if not api_key:
         return (
-            "⚠️ <b>DeepSeek пока не настроен.</b>\n\n"
+            "⚠️ <b>OpenModel пока не настроен.</b>\n\n"
             "Добавь переменную <code>DEEPSEEK_API_KEY</code> "
             "в переменные окружения Railway."
         )
@@ -34,9 +37,9 @@ async def analyze_finances(
 и давать короткие, понятные и практичные выводы.
 
 Правила:
+
 - Не придумывай отсутствующие данные.
 - Не меняй суммы.
-- Не выполняй математические расчёты, если они не нужны.
 - Не осуждай пользователя за его расходы.
 - Не давай инвестиционных или кредитных рекомендаций.
 - Пиши на русском языке.
@@ -54,6 +57,7 @@ async def analyze_finances(
 {categories_text}
 
 Сделай:
+
 1. Краткий вывод.
 2. Назови 1-2 самые крупные категории.
 3. Укажи, на что стоит обратить внимание.
@@ -61,24 +65,24 @@ async def analyze_finances(
 """
 
     payload = {
-        "model": DEEPSEEK_MODEL,
+        "model": OPENMODEL_MODEL,
+        "max_tokens": 800,
         "messages": [
             {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {
                 "role": "user",
-                "content": user_prompt,
-            },
+                "content": (
+                    system_prompt
+                    + "\n\n"
+                    + user_prompt
+                ),
+            }
         ],
-        "stream": False,
-        "max_tokens": 800,
     }
 
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
     }
 
     try:
@@ -89,32 +93,48 @@ async def analyze_finances(
         ) as session:
 
             async with session.post(
-                DEEPSEEK_API_URL,
+                OPENMODEL_API_URL,
                 headers=headers,
                 json=payload,
             ) as response:
 
-                if response.status != 200:
-                    error_text = await response.text()
+                response_text = await response.text()
 
+                if response.status != 200:
                     print(
-                        f"DeepSeek API error "
-                        f"{response.status}: {error_text}"
+                        f"OpenModel API error "
+                        f"{response.status}: "
+                        f"{response_text}"
                     )
 
                     return (
-                        "❌ Не удалось получить анализ "
-                        "от ИИ.\n\n"
+                        "❌ Не удалось получить анализ от ИИ.\n\n"
                         f"Код ошибки: {response.status}"
                     )
 
                 data = await response.json()
 
-                return data["choices"][0]["message"]["content"]
+                try:
+                    return data["content"][0]["text"]
+
+                except (KeyError, IndexError, TypeError):
+                    print(
+                        f"Неожиданный ответ OpenModel: {data}"
+                    )
+
+                    return (
+                        "❌ ИИ вернул неожиданный формат ответа."
+                    )
 
     except asyncio.TimeoutError:
-        return "⏳ DeepSeek слишком долго отвечает. Попробуй ещё раз."
+        return (
+            "⏳ OpenModel слишком долго отвечает. "
+            "Попробуй ещё раз."
+        )
 
     except Exception as e:
-        print(f"DeepSeek error: {e}")
-        return "❌ Произошла ошибка при обращении к ИИ."
+        print(f"OpenModel error: {e}")
+
+        return (
+            "❌ Произошла ошибка при обращении к ИИ."
+        )
